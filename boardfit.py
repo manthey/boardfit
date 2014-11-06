@@ -84,7 +84,7 @@ def get_state(current, best):
    out.append('%*d'%(current['x_digits'], current['w']))
    out.append('%*d'%(current['x_digits'], best['w']))
    if 'tasks_left' in best:
-      out.append('%*d:%*d'%(best['task_digits'], best['task_watch'], best['task_digits'], best['tasks_left']))
+      out.append('%*d:%*d'%(best['task_digits'], current['task'], best['task_digits'], best['tasks_left']))
    out = " ".join(out)
    return out
 
@@ -320,11 +320,14 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None)
       for y in xrange(0, height-parts[partnum]['h']+1):
          if best['w'] in current.get('widths_values', {}):
             return
-         if overlap_image(current['data'], part['mask'], x-gap, y-gap, fliph, flipv):
+         if not 'mask' in current:
+            current['mask'] = blank_image(len(current['data'][0]), len(current['data']))
+         if overlap_image(current['mask'], part['data'], x, y, fliph, flipv):
             overlapped = True
             continue
          newcur = copy.deepcopy(current)
          add_image(newcur['data'], part['data'], x, y, fliph, flipv)
+         add_image(newcur['mask'], part['mask'], x-gap, y-gap, fliph, flipv)
          newcur['lastx'] = x
          newcur['lasty'] = y
          newcur['maxw'] = max(newcur['maxw'], x+part['w']+gap)
