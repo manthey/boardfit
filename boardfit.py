@@ -26,22 +26,22 @@ def add_image(base, sub, x0, y0, fliph=False, flipv=False, maxval=0xFF):
           x0, y0: position within the base image that the upper left of
                   the sub image will be located.  May be negative.
           flipx, flipv: flip the sub image along one of the axes.
-          maxval: any value equal to or above this isn't coied."""
+          maxval: any value equal to or above this isn't copied."""
    bw = len(base[0])
    bh = len(base)
    sw = len(sub[0])
    sh = len(sub)
    swm1 = sw-1
    shm1 = sh-1
+   x1, x2 = max(0, -x0), min(sw, bw-x0)
    for y in xrange(max(0, -y0), min(sh, bh-y0)):
-      by = y+y0
       if flipv:
          line = sub[shm1-y]
       else:
          line = sub[y]
-      baseline = base[by]
+      baseline = base[y+y0]
       if fliph:
-         for x in xrange(max(0, -x0), min(sw, bw-x0)):
+         for x in xrange(x1, x2):
             p = line[swm1-x]
             if p>=maxval:
                continue
@@ -49,7 +49,7 @@ def add_image(base, sub, x0, y0, fliph=False, flipv=False, maxval=0xFF):
             if p<baseline[bx]:
                baseline[bx] = p
       else:
-         for x in xrange(max(0, -x0), min(sw, bw-x0)):
+         for x in xrange(x1, x2):
             p = line[x]
             if p>=maxval:
                continue
@@ -99,10 +99,10 @@ def deepcopy(object):
    newobj = copy.copy(object)
    for key in newobj:
       if isinstance(newobj[key], list):
-         newobj[key] = object[key][:]
          if len(newobj[key]) and isinstance(newobj[key][0], list):
-            for i in xrange(len(newobj[key])):
-               newobj[key][i] = object[key][i][:]
+            newobj[key] = [val[:] for val in object[key]]
+         else:
+            newobj[key] = object[key][:]
    return newobj
 
 
@@ -283,8 +283,8 @@ def overlap_image(base, sub, x0, y0, fliph=False, flipv=False, maxval=0xC0, rang
                       image.
    Exit:  overlaps: True if the image overlaps, False if it doesn't"""
    bw = len(base[0])
-   if maxbasex is not None:
-      bw = min(bw, maxbasex)
+   if maxbasex is not None and maxbasex<bw:
+      bw = maxbasex
    bh = len(base)
    sw = len(sub[0])
    sh = len(sub)
@@ -305,24 +305,31 @@ def overlap_image(base, sub, x0, y0, fliph=False, flipv=False, maxval=0xC0, rang
          maxx = sw
       if baseranges:
          (minbx, maxbx) = baseranges[by]
-         if maxbx is not None:
-            minbx = minbx-x0
-            if minbx>minx:
-               minx = minbx
-            maxbx = maxbx+1-x0
-            if maxbx<maxx:
-               maxx = maxbx
+         if maxbx is None:
+            continue
+         minbx = minbx-x0
+         if minbx>minx:
+            minx = minbx
+         maxbx = maxbx+1-x0
+         if maxbx<maxx:
+            maxx = maxbx
+         if maxx<=minx:
+            continue
       if flipv:
          line = sub[shm1-y]
       else:
          line = sub[y]
       baseline = base[by]
+      if minx<-x0:
+         minx = -x0
+      if maxx>bw-x0:
+         maxx = bw-x0
       if fliph:
-         for x in xrange(max(minx, -x0), min(maxx, bw-x0)):
+         for x in xrange(minx, maxx):
             if baseline[x+x0]<maxval and line[swm1-x]<maxval:
                return True
       else:
-         for x in xrange(max(minx, -x0), min(maxx, bw-x0)):
+         for x in xrange(minx, maxx):
             if baseline[x+x0]<maxval and line[x]<maxval:
                return True
    return False
@@ -337,6 +344,9 @@ def process_image(current, parts, partnum, best, lock=None):
           lock: a multiprocessing lock."""
    if not 'data' in current:
       current['data'] = blank_image(best['w'], current['height'])
+   if not 'mask' in current:
+      current['mask'] = blank_image(best['w'], current['height'])
+      current['ranges'] = [(None, None)]*current['height']
    if not 'orient' in current:
       if parts[partnum]['num']:
          orientrange = 4
@@ -372,6 +382,7 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None)
    group_key = tuple([part['num'] for part in parts[partnum:]])
    group_w = current.get('widths', {}).get(group_key, None)
    part = parts[partnum]
+   numparts = len(parts)
    for x in xrange(current['lastx'], current['maxw']+1):
       if group_w and x+group_w>=best['w']:
          break
@@ -381,8 +392,6 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None)
       for y in xrange(0, height-parts[partnum]['h']+1):
          if best['w'] in current.get('widths_values', {}):
             return
-         if not 'mask' in current:
-            current['mask'] = blank_image(len(current['data'][0]), len(current['data']))
          if overlap_image(current['mask'], part['data'], x, y, fliph, flipv, ranges=part['ranges'], maxbasex=current['w'], baseranges=current.get('ranges', None)):
             overlapped = True
             continue
@@ -395,7 +404,7 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None)
          newcur['w'] = max(newcur['w'], x+part['w'])
          newcur['ranges'] = calculate_ranges(newcur['mask'], newcur['w'])
          newcur['state'].append({'num':part['num'], 'fliph':fliph, 'flipv':flipv, 'x':x, 'y':y})
-         if verbose>=5 or (((verbose>=1 and partnum+1==len(parts)) or verbose>=2) and (not 'task' in newcur or newcur['task']==best['task_watch'])):
+         if verbose>=5 or ((verbose>=2 or (verbose>=1 and partnum+1==numparts)) and (not 'task' in newcur or newcur['task']==best['task_watch'])):
             if verbose>=4 or time.time()-best.get('laststatus', 0)>=1:
                state = get_state(newcur, best)
                if lock:
@@ -420,7 +429,7 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None)
          if newcur['w']>=best['w']:
             del newcur
             continue
-         if partnum+1==len(parts):
+         if partnum+1==numparts:
             best['w'] = newcur['w']
             best['data'] = newcur['data']
             if verbose>=3 or (verbose>=1 and current['parts']==current['totalparts']):
