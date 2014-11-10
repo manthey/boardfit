@@ -69,6 +69,43 @@ def blank_image(w, h):
    return image
 
 
+def calculate_ranges(image, maxw=None):
+   """Calculate the left-most and right-most used pixel in each line of an
+   image.
+   Enter: image: an array of pixels in the [y][x] format.
+          maxw: the maximum distaince to check.  None for all.
+   Exit:  ranges: a list of tuples, one per line (y) in the image.  Each
+                  tuple has the leftmost used pixel and the rightmost used
+                  pixel.  If no pixels are used in that line, this is
+                  stored as (None, None)"""
+   ranges = []
+   if maxw is None:
+      maxw = len(image[0])
+   for line in image:
+      minx = maxx = None
+      minx = next((x for x in xrange(maxw) if line[x]<0xC0), None)
+      if minx is not None:
+         maxx = next((x for x in xrange(maxw-1, minx-1, -1) if line[x]<0xC0), None)
+      ranges.append((minx, maxx))
+   return ranges
+
+
+def deepcopy(object):
+   """Deep copy an object.  We know that the object is a dictionary with
+    some elements that are lists and some that lists of lists.  By using
+    this information, we can copy the object faster than copy.deepcopy.
+   Enter: object: the dictionary object to copy.
+   Exit:  object_copy: the copy of the object."""
+   newobj = copy.copy(object)
+   for key in newobj:
+      if isinstance(newobj[key], list):
+         newobj[key] = object[key][:]
+         if len(newobj[key]) and isinstance(newobj[key][0], list):
+            for i in xrange(len(newobj[key])):
+               newobj[key][i] = object[key][i][:]
+   return newobj
+
+
 def get_state(current, best):
    """Format the current state of the image processing stack.
    Enter: current: the image processing stack, including the state.
@@ -145,6 +182,7 @@ def load_file(parts, file, width, gap, verbose=0, lock=None, priority=None, num=
          break
       pixels = [line[:-1] for line in pixels]
    part = {'w':len(pixels[0]), 'h':len(pixels), 'data':pixels, 'file':file}
+   part['ranges'] = calculate_ranges(pixels)
    mask = blank_image(part['w']+gap*2, part['h']+gap*2)
    check = []
    for dy in xrange(-gap, gap+1):
@@ -173,7 +211,10 @@ def load_file(parts, file, width, gap, verbose=0, lock=None, priority=None, num=
       part['num'] = len(parts)
    else:
       part['num'] = num
-   parts.append(part)
+   if len(parts)>part['num']:
+      parts[part['num']] = part
+   else:
+      parts.append(part)
    if verbose>=1:
       print "%5.3fs to create mask for %d: %s (%d x %d)"%(time.time()-starttime, part['num'], file, part['w'], part['h'])
    if lock:
@@ -190,7 +231,7 @@ def load_files(files, width, gap, verbose=0, multiprocess=False, priority=None):
                         number can specify how many worker threads are used.
           priority: the priority to set if running in a multiprocess manner.
    Exit:  parts: the files loaded and processed."""
-   parts = []
+   parts = [None]*len(files)
    if multiprocess:
       if multiprocess is not True:
          pool = multiprocessing.Pool(multiprocess, initializer=worker_init)
@@ -226,7 +267,7 @@ def load_files(files, width, gap, verbose=0, multiprocess=False, priority=None):
    return parts
 
 
-def overlap_image(base, sub, x0, y0, fliph=False, flipv=False, maxval=0xC0):
+def overlap_image(base, sub, x0, y0, fliph=False, flipv=False, maxval=0xC0, ranges=None, maxbasex=None, baseranges=None):
    """Check if a sub image overlaps a base image.
    Enter: base: the base image in [y][x] format.  Modified.
           sub: the image to add in [y][x] format.
@@ -234,8 +275,16 @@ def overlap_image(base, sub, x0, y0, fliph=False, flipv=False, maxval=0xC0):
                   the sub image will be located.  May be negative.
           flipx, flipv: flip the sub image along one of the axes.
           maxval: any value equal to or above this is ignored.
+          ranges: if present, an array that has one tuple per line in the
+                  sub image with each tuple containing the left-most and
+                  right-most pixels in that line that are below maxval.
+          maxbasex: if set, don't check past this width in the base image.
+          baseranges: if present, thiis is the ranges array for the base
+                      image.
    Exit:  overlaps: True if the image overlaps, False if it doesn't"""
    bw = len(base[0])
+   if maxbasex is not None:
+      bw = min(bw, maxbasex)
    bh = len(base)
    sw = len(sub[0])
    sh = len(sub)
@@ -243,26 +292,38 @@ def overlap_image(base, sub, x0, y0, fliph=False, flipv=False, maxval=0xC0):
    shm1 = sh-1
    for y in xrange(max(0, -y0), min(sh, bh-y0)):
       by = y+y0
+      if ranges:
+         if flipv:
+            (minx, maxx) = ranges[shm1-y]
+         else:
+            (minx, maxx) = ranges[y]
+         if fliph:
+            (minx, maxx) = (swm1-maxx, swm1-minx)
+         maxx += 1
+      else:
+         minx = 0
+         maxx = sw
+      if baseranges:
+         (minbx, maxbx) = baseranges[by]
+         if maxbx is not None:
+            minbx = minbx-x0
+            if minbx>minx:
+               minx = minbx
+            maxbx = maxbx+1-x0
+            if maxbx<maxx:
+               maxx = maxbx
       if flipv:
          line = sub[shm1-y]
       else:
          line = sub[y]
       baseline = base[by]
       if fliph:
-         for x in xrange(max(0, -x0), min(sw, bw-x0)):
-            p = line[swm1-x]
-            if p>=maxval:
-               continue
-            bx = x+x0
-            if baseline[bx]<maxval:
+         for x in xrange(max(minx, -x0), min(maxx, bw-x0)):
+            if baseline[x+x0]<maxval and line[swm1-x]<maxval:
                return True
       else:
-         for x in xrange(max(0, -x0), min(sw, bw-x0)):
-            p = line[x]
-            if p>=maxval:
-               continue
-            bx = x+x0
-            if baseline[bx]<maxval:
+         for x in xrange(max(minx, -x0), min(maxx, bw-x0)):
+            if baseline[x+x0]<maxval and line[x]<maxval:
                return True
    return False
 
@@ -322,16 +383,17 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None)
             return
          if not 'mask' in current:
             current['mask'] = blank_image(len(current['data'][0]), len(current['data']))
-         if overlap_image(current['mask'], part['data'], x, y, fliph, flipv):
+         if overlap_image(current['mask'], part['data'], x, y, fliph, flipv, ranges=part['ranges'], maxbasex=current['w'], baseranges=current.get('ranges', None)):
             overlapped = True
             continue
-         newcur = copy.deepcopy(current)
+         newcur = deepcopy(current)
          add_image(newcur['data'], part['data'], x, y, fliph, flipv)
          add_image(newcur['mask'], part['mask'], x-gap, y-gap, fliph, flipv)
          newcur['lastx'] = x
          newcur['lasty'] = y
          newcur['maxw'] = max(newcur['maxw'], x+part['w']+gap)
          newcur['w'] = max(newcur['w'], x+part['w'])
+         newcur['ranges'] = calculate_ranges(newcur['mask'], newcur['w'])
          newcur['state'].append({'num':part['num'], 'fliph':fliph, 'flipv':flipv, 'x':x, 'y':y})
          if verbose>=5 or (((verbose>=1 and partnum+1==len(parts)) or verbose>=2) and (not 'task' in newcur or newcur['task']==best['task_watch'])):
             if verbose>=4 or time.time()-best.get('laststatus', 0)>=1:
@@ -455,7 +517,7 @@ def process_parts(Parts, Current, Best):
             Current['orientnum'][Parts[opn]['num']] = opn
          for orient in xrange(0, 4**len(Parts), 4):
             for combo in itertools.permutations(Parts):
-               current = copy.deepcopy(Current)
+               current = deepcopy(Current)
                current['orient'] = orient
                if pool:
                   current['task'] = len(tasks)
@@ -468,7 +530,7 @@ def process_parts(Parts, Current, Best):
       else:
          for combo in itertools.permutations(Parts):
             if pool:
-               current = copy.deepcopy(Current)
+               current = deepcopy(Current)
                current['task'] = len(tasks)
                tasks.append(pool.apply_async(process_image_task, args=(current, combo, 0, Best, lock)))
                del current
@@ -656,9 +718,10 @@ or equal to 0xC0, it is ignored for overlap calculations.
    Current['widths_values'] = dict.fromkeys(Current['widths'].values())
    for comblen in xrange(2, len(Parts)):
       for combo in itertools.combinations(Parts, comblen):
+         part_starttime = time.time()
          w = process_parts(combo, Current, {})
          if Verbose>=2:
-            out = 'Partial: %s %d'%(str(tuple([part['num'] for part in combo])), w)
+            out = 'Partial: %s %d (%3.1fs)'%(str(tuple([part['num'] for part in combo])), w, time.time()-part_starttime)
             print "%-79s"%out
          keys = [part['num'] for part in combo]
          for perm in itertools.permutations(keys):
