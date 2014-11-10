@@ -538,15 +538,15 @@ def process_parts(Parts, Current, Best):
                del current
       else:
          for combo in itertools.permutations(Parts):
+            current = deepcopy(Current)
             if pool:
-               current = deepcopy(Current)
                current['task'] = len(tasks)
                tasks.append(pool.apply_async(process_image_task, args=(current, combo, 0, Best, lock)))
-               del current
                Best['tasks_left'] = len(tasks)
                Best['task_digits'] = len('%d'%len(tasks))
             else:
-               process_image(Current, combo, 0, Best)
+               process_image(current, combo, 0, Best)
+            del current
       if pool:
          pool.close()
          while len(tasks):
