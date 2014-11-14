@@ -120,7 +120,7 @@ def get_state(current, best):
          out.append(' '*(4+current['part_digits']+current['x_digits']+current['y_digits']))
    out.append('%*d'%(current['x_digits'], current['w']))
    out.append('%*d'%(current['x_digits'], best['w']))
-   if 'tasks_left' in best:
+   if 'task' in current and 'tasks_left' in best:
       out.append('%*d:%*d'%(best['task_digits'], current['task'], best['task_digits'], best['tasks_left']))
    out = " ".join(out)
    return out
@@ -335,31 +335,53 @@ def overlap_image(base, sub, x0, y0, fliph=False, flipv=False, maxval=0xC0, rang
    return False
 
 
-def process_image(current, parts, partnum, best, lock=None):
+def process_image(current, parts, partnum, best, lock=None, pool=None, tasks=None):
    """Process an image.
    Enter: current: the current layout state.
           parts: the list of parts to process in order.
           partnum: the 0-based index into the parts to process.
           best: a dictionary with the best result so far; can be changed.
-          lock: a multiprocessing lock."""
+          lock: a multiprocessing lock.
+          pool: multiprocessing pool, if this is the main task.
+          tasks: an array of started tasks used with the pool."""
+   if pool:
+      if partnum>=current.get('stage', 0.5):
+         current['task'] = len(tasks)
+         tasks.append(pool.apply_async(process_image_task, args=(current, parts, partnum, best, lock)))
+         best['tasks_left'] = len(tasks)
+         best['task_digits'] = len('%d'%len(tasks))
+         return
+   if not 'order' in current:
+      current['order'] = range(len(parts))
    if not 'data' in current:
       current['data'] = blank_image(best['w'], current['height'])
    if not 'mask' in current:
       current['mask'] = blank_image(best['w'], current['height'])
       current['ranges'] = [(None, None)]*current['height']
-   if not 'orient' in current:
-      if parts[partnum]['num']:
+   left = current['order'][partnum:]
+   for part in left:
+      newcur = deepcopy(current)
+      newcur['order'][partnum] = part
+      remaining = left[:]
+      remaining.remove(part)
+      newcur['order'][partnum+1:] = remaining
+      if part:
          orientrange = 4
       else:
          orientrange = 1
       for orient in xrange(orientrange):
-         process_image_orient(current, parts, partnum, best, (orient&1)==1, (orient&2)==2, lock)
-   else:
-      orient = (current['orient']>>(2*current['orientnum'][parts[partnum]['num']]))&3
-      process_image_orient(current, parts, partnum, best, (orient&1)==1, (orient&2)==2, lock)
+         if pool:
+            if partnum+0.5>=newcur.get('stage', 0.5):
+               taskcur = deepcopy(newcur)
+               taskcur['task'] = len(tasks)
+               tasks.append(pool.apply_async(process_image_orient_task, args=(taskcur, parts, partnum, best, (orient&1)==1, (orient&2)==2, lock)))
+               best['tasks_left'] = len(tasks)
+               best['task_digits'] = len('%d'%len(tasks))
+               continue
+         process_image_orient(newcur, parts, partnum, best, (orient&1)==1, (orient&2)==2, lock, pool, tasks)
 
 
-def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None):
+def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None, pool=None, tasks=None):
    """Process an image in a specific orientation.
       current contains lastx, lasty (the last location tried), maxw (the
     maximum length of used part of the plank including gap), w (the length
@@ -375,13 +397,15 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None)
           partnum: the 0-based index into the parts to process.
           best: a dictionary with the best result so far; can be changed.
           fliph, flipv: the orientation of the image for processing.
-          lock: a multiprocessing lock."""
+          lock: a multiprocessing lock.
+          pool: multiprocessing pool, if this is the main task.
+          tasks: an array of started tasks used with the pool."""
    gap = current['gap']
    height = current['height']
    verbose = current['verbose']
-   group_key = tuple([part['num'] for part in parts[partnum:]])
+   group_key = tuple([parts[index]['num'] for index in current['order'][partnum:]])
    group_w = current.get('widths', {}).get(group_key, None)
-   part = parts[partnum]
+   part = parts[current['order'][partnum]]
    numparts = len(parts)
    for x in xrange(current['lastx'], current['maxw']+1):
       if group_w and x+group_w>=best['w']:
@@ -389,7 +413,7 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None)
       if x+part['w']>=best['w']:
          break
       overlapped = False
-      for y in xrange(0, height-parts[partnum]['h']+1):
+      for y in xrange(0, height-part['h']+1):
          if best['w'] in current.get('widths_values', {}):
             return
          if overlap_image(current['mask'], part['data'], x, y, fliph, flipv, ranges=part['ranges'], maxbasex=current['w'], baseranges=current.get('ranges', None)):
@@ -427,7 +451,6 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None)
                      del iptr
                   best['lastlogppm'] = time.time()
          if newcur['w']>=best['w']:
-            del newcur
             continue
          if partnum+1==numparts:
             best['w'] = newcur['w']
@@ -442,12 +465,27 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None)
             if verbose>=3 or (verbose>=2 and current['parts']==current['totalparts']):
                write_ppm('current'+current['out'], best['data'], best['w'], verbose=verbose)
          else:
-            process_image(newcur, parts, partnum+1, best, lock=lock)
-         del newcur
+            process_image(newcur, parts, partnum+1, best, lock=lock, pool=pool, tasks=tasks)
       # This optimization is only correct if the parts are individually
       # contiguous
       if not overlapped:
          break
+
+
+def process_image_orient_task(current, parts, partnum, best, fliph, flipv, lock=None):
+   """Process an image, marking the task started and finished as
+    appropriate.
+   Enter: current: the current layout state.
+          parts: the list of parts to process in order.
+          partnum: the 0-based index into the parts to process.
+          best: a dictionary with the best result so far; can be changed.
+          fliph, flipv: the orientation of the image for processing.
+          lock: a multiprocessing lock."""
+   best['tasks_started'] += '%d '%current['task']
+   if current['priority']:
+      set_priority(current['priority'])
+   process_image_orient(current, parts, partnum, best, fliph, flipv, lock)
+   best['tasks_finished'] += '%d '%current['task']
 
 
 def process_image_task(current, parts, partnum, best, lock=None):
@@ -475,7 +513,6 @@ def process_parts(Parts, Current, Best):
    Beat = Current['beat']
    Height = Current['height']
    Multiprocess = Current['multiprocess']
-   OrientFirst = Current['orientfirst']
    Verbose = Current['verbose']
 
    maxw = sum([part['w']+Gap for part in Parts])
@@ -518,35 +555,12 @@ def process_parts(Parts, Current, Best):
    else:
       pool = None
       lock = None
+      tasks = None
 
    try:
-      if OrientFirst:
-         Current['orientnum'] = {}
-         for opn in xrange(len(Parts)):
-            Current['orientnum'][Parts[opn]['num']] = opn
-         for orient in xrange(0, 4**len(Parts), 4):
-            for combo in itertools.permutations(Parts):
-               current = deepcopy(Current)
-               current['orient'] = orient
-               if pool:
-                  current['task'] = len(tasks)
-                  tasks.append(pool.apply_async(process_image_task, args=(current, combo, 0, Best, lock)))
-                  Best['tasks_left'] = len(tasks)
-                  Best['task_digits'] = len('%d'%len(tasks))
-               else:
-                  process_image(current, combo, 0, Best)
-               del current
-      else:
-         for combo in itertools.permutations(Parts):
-            current = deepcopy(Current)
-            if pool:
-               current['task'] = len(tasks)
-               tasks.append(pool.apply_async(process_image_task, args=(current, combo, 0, Best, lock)))
-               Best['tasks_left'] = len(tasks)
-               Best['task_digits'] = len('%d'%len(tasks))
-            else:
-               process_image(current, combo, 0, Best)
-            del current
+      current = deepcopy(Current)
+      process_image(current, Parts, 0, Best, lock, pool, tasks)
+      del current
       if pool:
          pool.close()
          while len(tasks):
@@ -651,9 +665,9 @@ if __name__=='__main__':
    Files = []
    Height = int(11.5*25)
    Gap = int(0.5*25)
-   OrientFirst = False
    Beat = None
    Multiprocess = False
+   Stage = 1
    GenerateGIF = False
    OutFile = 'best.ppm'
    Priority = None
@@ -672,12 +686,12 @@ if __name__=='__main__':
          Multiprocess = int(arg.split("=", 1)[1])
          if Multiprocess<=1:
             Multiprocess = False
-      elif arg=="--orient":
-         OrientFirst = True
       elif arg.startswith('--out='):
          OutFile = arg.split('=', 1)[1]
       elif arg.startswith("--priority="):
          Priority = arg.split('=', 1)[1]
+      elif arg.startswith("--stage="):
+         Stage = float(arg.split("=", 1)[1])
       elif arg=="-v":
          Verbose += 1
       elif arg.startswith('-'):
@@ -688,7 +702,7 @@ if __name__=='__main__':
       print """Compute best-fit lumber usage.
 
 Syntax: boardfit.py (ppm files ...) --height=(height of board) --gap=(gap size)
-                    --orient --beat=(length) --multi[=(workers)] --gif
+                    --beat=(length) --multi[=(workers)] --stage=(stage) --gif
                     --out=(output ppm) --priority=(priority) -v
 
 The input files must be P5 ppm files with the top edge considered
@@ -702,14 +716,13 @@ or equal to 0xC0, it is ignored for overlap calculations.
 --multi uses multiprocessing to take advantage of multiple cores.  If no number
   is specified, one worker per core is started.  A value of 0 or 1 disables
   multiprocessing.
---orient tries all of one set of orientations before trying the next one.
-  Otherwise, each part is tried in all orientations before changing anything
-  about the next one.  Using --orient can result in greater parallelization in
-  multiprocessing, but will have slightly more overhead.
 --out specifies the name of the output ppm.  An additional file current(out) is
   written whenever a local best is obtained.
 --priority asks the program to run at a particular priority level.  Options are
   'normal', 'low', 'idle', or a nice-like number.
+--stage specifies at what point multiprocessing should call subprocesses.
+  Default is 1, which calculates where one part can be before calling the
+  subprocesses.  Half values can be used to indicate partial part processing.
 -v increases the verbosity."""
       sys.exit(0)
 
@@ -718,7 +731,7 @@ or equal to 0xC0, it is ignored for overlap calculations.
 
    Parts = load_files(Files, Height, Gap, Verbose, Multiprocess, Priority)
 
-   Current = {'gap': Gap, 'height': Height, 'verbose': Verbose, 'gif': GenerateGIF, 'out': OutFile, 'multiprocess': Multiprocess, 'beat': Beat, 'orientfirst': OrientFirst, 'priority': Priority, 'totalparts': len(Parts)}
+   Current = {'gap': Gap, 'height': Height, 'verbose': Verbose, 'gif': GenerateGIF, 'out': OutFile, 'multiprocess': Multiprocess, 'beat': Beat, 'stage': Stage, 'priority': Priority, 'totalparts': len(Parts)}
    Best = {}
 
    Current['widths'] = {}
