@@ -392,11 +392,13 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None,
    height = current['height']
    verbose = current['verbose']
    group_key = tuple([parts[index]['num'] for index in current['order'][partnum:]])
-   group_w = current.get('widths', {}).get(group_key, None)
+   group_w = current['widths'].get(group_key, None)
    part = parts[current['order'][partnum]]
    numparts = len(parts)
    # xmax is min(current['maxw']+1, (ranges calc))
    for x in xrange(current['lastx'], current['maxw']+1):
+      if best['w'] in current['widths_values']:
+         return
       if group_w and x+group_w>=best['w']:
          break
       if x+part['w']>=best['w']:
@@ -411,8 +413,6 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None,
             # Don't trigger the end-of-search on this path
             overlapped = True
       for y in xrange(ymin, height-part['h']+1):
-         if best['w'] in current.get('widths_values', {}):
-            return
          if overlap_image(current['mask'], part['data'], x, y, fliph, flipv, ranges=part['ranges'], baseranges=current['ranges']):
             overlapped = True
             continue
