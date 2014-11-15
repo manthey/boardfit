@@ -267,7 +267,7 @@ def load_files(files, width, gap, verbose=0, multiprocess=False, priority=None):
    return parts
 
 
-def overlap_image(base, sub, x0, y0, fliph=False, flipv=False, maxval=0xC0, ranges=None, maxbasex=None, baseranges=None):
+def overlap_image(base, sub, x0, y0, fliph=False, flipv=False, maxval=0xC0, ranges=None, baseranges=None):
    """Check if a sub image overlaps a base image.
    Enter: base: the base image in [y][x] format.  Modified.
           sub: the image to add in [y][x] format.
@@ -275,56 +275,43 @@ def overlap_image(base, sub, x0, y0, fliph=False, flipv=False, maxval=0xC0, rang
                   the sub image will be located.  May be negative.
           flipx, flipv: flip the sub image along one of the axes.
           maxval: any value equal to or above this is ignored.
-          ranges: if present, an array that has one tuple per line in the
-                  sub image with each tuple containing the left-most and
-                  right-most pixels in that line that are below maxval.
-          maxbasex: if set, don't check past this width in the base image.
-          baseranges: if present, thiis is the ranges array for the base
-                      image.
+          ranges: an array that has one tuple per line in the sub image
+                  with each tuple containing the left-most and right-most
+                  pixels in that line that are below maxval.
+          baseranges: the ranges array for the base image.
    Exit:  overlaps: True if the image overlaps, False if it doesn't"""
-   bw = len(base[0])
-   if maxbasex is not None and maxbasex<bw:
-      bw = maxbasex
    bh = len(base)
    sw = len(sub[0])
    sh = len(sub)
    swm1 = sw-1
    shm1 = sh-1
-   for y in xrange(max(0, -y0), min(sh, bh-y0)):
+   for y in xrange(sh):
       by = y+y0
-      if baseranges:
-         (minbx, maxbx) = baseranges[by]
-         if maxbx is None:
-            continue
-      if ranges:
-         if flipv:
-            (minx, maxx) = ranges[shm1-y]
-         else:
-            (minx, maxx) = ranges[y]
-         if fliph:
-            (minx, maxx) = (swm1-maxx, swm1-minx)
-         maxx += 1
+      (minbx, maxbx) = baseranges[by]
+      if maxbx is None:
+         continue
+      maxbx = maxbx+1-x0
+      if flipv:
+         (minx, maxx) = ranges[shm1-y]
       else:
-         minx = 0
-         maxx = sw
-      if baseranges:
-         minbx = minbx-x0
-         if minbx>minx:
-            minx = minbx
-         maxbx = maxbx+1-x0
-         if maxbx<maxx:
-            maxx = maxbx
-         if maxx<=minx:
-            continue
+         (minx, maxx) = ranges[y]
+      if fliph:
+         (minx, maxx) = (swm1-maxx, swm1-minx)
+      if maxbx<=minx:
+         continue
+      maxx += 1
+      minbx = minbx-x0
+      if minbx>minx:
+         minx = minbx
+      if maxbx<maxx:
+         maxx = maxbx
+      if maxx<=minx:
+         continue
       if flipv:
          line = sub[shm1-y]
       else:
          line = sub[y]
       baseline = base[by]
-      if minx<-x0:
-         minx = -x0
-      if maxx>bw-x0:
-         maxx = bw-x0
       if fliph:
          for x in xrange(minx, maxx):
             if baseline[x+x0]<maxval and line[swm1-x]<maxval:
@@ -426,7 +413,7 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None,
       for y in xrange(ymin, height-part['h']+1):
          if best['w'] in current.get('widths_values', {}):
             return
-         if overlap_image(current['mask'], part['data'], x, y, fliph, flipv, ranges=part['ranges'], maxbasex=current['w'], baseranges=current['ranges']):
+         if overlap_image(current['mask'], part['data'], x, y, fliph, flipv, ranges=part['ranges'], baseranges=current['ranges']):
             overlapped = True
             continue
          newcur = deepcopy(current)
