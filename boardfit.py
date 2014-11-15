@@ -292,6 +292,10 @@ def overlap_image(base, sub, x0, y0, fliph=False, flipv=False, maxval=0xC0, rang
    shm1 = sh-1
    for y in xrange(max(0, -y0), min(sh, bh-y0)):
       by = y+y0
+      if baseranges:
+         (minbx, maxbx) = baseranges[by]
+         if maxbx is None:
+            continue
       if ranges:
          if flipv:
             (minx, maxx) = ranges[shm1-y]
@@ -304,9 +308,6 @@ def overlap_image(base, sub, x0, y0, fliph=False, flipv=False, maxval=0xC0, rang
          minx = 0
          maxx = sw
       if baseranges:
-         (minbx, maxbx) = baseranges[by]
-         if maxbx is None:
-            continue
          minbx = minbx-x0
          if minbx>minx:
             minx = minbx
@@ -407,16 +408,25 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None,
    group_w = current.get('widths', {}).get(group_key, None)
    part = parts[current['order'][partnum]]
    numparts = len(parts)
+   # xmax is min(current['maxw']+1, (ranges calc))
    for x in xrange(current['lastx'], current['maxw']+1):
       if group_w and x+group_w>=best['w']:
          break
       if x+part['w']>=best['w']:
          break
       overlapped = False
-      for y in xrange(0, height-part['h']+1):
+      ymin = 0
+      if x==current['lastx']:
+         ymin = current['lasty']
+         if partnum and current['order'][partnum]>current['order'][partnum-1]:
+            ymin += 1
+         if ymin:
+            # Don't trigger the end-of-search on this path
+            overlapped = True
+      for y in xrange(ymin, height-part['h']+1):
          if best['w'] in current.get('widths_values', {}):
             return
-         if overlap_image(current['mask'], part['data'], x, y, fliph, flipv, ranges=part['ranges'], maxbasex=current['w'], baseranges=current.get('ranges', None)):
+         if overlap_image(current['mask'], part['data'], x, y, fliph, flipv, ranges=part['ranges'], maxbasex=current['w'], baseranges=current['ranges']):
             overlapped = True
             continue
          newcur = deepcopy(current)
@@ -453,21 +463,26 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None,
          if newcur['w']>=best['w']:
             continue
          if partnum+1==numparts:
-            best['w'] = newcur['w']
-            best['data'] = newcur['data']
+            if lock:
+               lock.acquire();
+            # This could have been changed by another process, so make sure
+            if newcur['w']<best['w']:
+               best['w'] = newcur['w']
+               best['data'] = newcur['data']
             if verbose>=3 or (verbose>=1 and current['parts']==current['totalparts']):
-               if lock:
-                  lock.acquire();
                print get_state(newcur, best)
                print 'Current best width: %d '%best['w']
-               if lock:
-                  lock.release();
+            if lock:
+               lock.release();
             if verbose>=3 or (verbose>=2 and current['parts']==current['totalparts']):
                write_ppm('current'+current['out'], best['data'], best['w'], verbose=verbose)
          else:
             process_image(newcur, parts, partnum+1, best, lock=lock, pool=pool, tasks=tasks)
       # This optimization is only correct if the parts are individually
-      # contiguous
+      #  0  11111   contiguous and avoid other conditions.  An example on the
+      #  0      1   left with three parts with a gap of 1, the solution shown
+      #  000 22 1   will never be reached with a width of 8.  Rather, part 2
+      #             will end up to the right of part 1 with a width of 10.
       if not overlapped:
          break
 
