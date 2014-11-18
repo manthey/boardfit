@@ -126,14 +126,13 @@ def get_state(current, best):
    return out
 
 
-def load_file(parts, file, width, gap, verbose=0, lock=None, priority=None, num=None):
+def load_file(parts, file, width, gap, verbose=0, priority=None, num=None):
    """Load a file, generating a mask for it.
    Enter: parts: a list to store the result in.
           file: the path of the file to load.
           width: the width of the final board.
           gap: the width of the mask to add to each file.
           verbose: the verbosity for output.
-          lock: a multiprocessing lock.
           priority: the priority for this process.
           num: the number to assign this file.  None for auto-numbering."""
    if priority:
@@ -193,32 +192,18 @@ def load_file(parts, file, width, gap, verbose=0, lock=None, priority=None, num=
    starttime = time.time()
    for (dx, dy) in check:
       if verbose>=2:
-         if lock:
-            lock.acquire();
          sys.stdout.write("%3d,%3d %s  \r"%(dx, dy, file))
          sys.stdout.flush()
-         if lock:
-            lock.release();
       add_image(mask, pixels, dx+gap, dy+gap, maxval=0xC0)
 
    part['mask'] = mask
    if verbose>=3:
       write_ppm(file+'.data.ppm', part['data'])
       write_ppm(file+'.mask.ppm', part['mask'])
-   if lock:
-      lock.acquire();
-   if num is None:
-      part['num'] = len(parts)
-   else:
-      part['num'] = num
-   if len(parts)>part['num']:
-      parts[part['num']] = part
-   else:
-      parts.append(part)
+   part['num'] = num
    if verbose>=1:
       print "%5.3fs to create mask for %d: %s (%d x %d)"%(time.time()-starttime, part['num'], file, part['w'], part['h'])
-   if lock:
-      lock.release();
+   return part
 
 
 def load_files(files, width, gap, verbose=0, multiprocess=False, priority=None):
@@ -237,23 +222,24 @@ def load_files(files, width, gap, verbose=0, multiprocess=False, priority=None):
          pool = multiprocessing.Pool(multiprocess, initializer=worker_init)
       else:
          pool = multiprocessing.Pool(initializer=worker_init)
-      manager = multiprocessing.Manager()
-      lock = manager.RLock()
-      parts = manager.list(parts)
+      tasks = []
    else:
       pool = None
-      lock = None
 
    try:
       num = 0
       for file in files:
          if pool:
-            pool.apply_async(load_file, args=(parts, file, width, gap, verbose, lock, priority, num))
+            tasks.append(pool.apply_async(load_file, args=(parts, file, width, gap, verbose, priority, num)))
          else:
-            load_file(parts, file, width, gap, verbose, num=num)
+            part = load_file(parts, file, width, gap, verbose, num=num)
+            parts[part['num']] = part
          num += 1
       if pool:
          pool.close()
+         for task in tasks:
+            part = task.get()
+            parts[part['num']] = part
          pool.join()
    except KeyboardInterrupt:
       if pool:
@@ -466,10 +452,10 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, lock=None,
          else:
             process_image(newcur, parts, partnum+1, best, lock=lock, pool=pool, tasks=tasks)
       # This optimization is only correct if the parts are individually
-      #  0  11111   contiguous and avoid other conditions.  An example on the
-      #  0      1   left with three parts with a gap of 1, the solution shown
-      #  000 22 1   will never be reached with a width of 8.  Rather, part 2
-      #             will end up to the right of part 1 with a width of 10.
+      #            contiguous and avoid other conditions.  An example on the
+      # 0  11111   left with three parts with a gap of 1, the solution shown
+      # 0      1   will never be reached with a width of 8.  Rather, part 2
+      # 000 22 1   will end up to the right of part 1 with a width of 10.
       if not overlapped:
          break
 
@@ -619,15 +605,18 @@ def set_priority(priority):
          level = psutil.BELOW_NORMAL_PRIORITY_CLASS
       elif priority=='normal' or (nice is not None and nice==0):
          level = psutil.NORMAL_PRIORITY_CLASS
+      elif priority=='above' or (nice is not None and nice>=-10):
+         level = psutil.ABOVE_NORMAL_PRIORITY_CLASS
+      elif priority=='high' or (nice is not None and nice>=-18):
+         level = psutil.HIGH_PRIORITY_CLASS
       else:
          level = psutil.NORMAL_PRIORITY_CLASS
    else:
+      priorities = {'idle': 19, 'low': 10, 'normal': 0, 'above': -10, 'high': -18}
       if nice is not None:
          level = nice
-      elif priority=='idle':
-         level = 19
-      elif priority=='low':
-         level = 10
+      elif priority in priorities:
+         level = priorities[priority]
       else:
          level = 0
    proc = psutil.Process(os.getpid())
