@@ -18,6 +18,10 @@ except Exception:
 
 Verbose = 0
 
+TasksLeft = None
+TaskWatch = None
+TaskDigits = None
+TaskBestW = None
 
 def add_image(base, sub, x0, y0, fliph=False, flipv=False, maxval=0xFF):
    """Add a sub image to a base image.
@@ -120,8 +124,9 @@ def get_state(current, best):
          out.append(' '*(4+current['part_digits']+current['x_digits']+current['y_digits']))
    out.append('%*d'%(current['x_digits'], current['w']))
    out.append('%*d'%(current['x_digits'], best['w']))
-   if 'task' in current and 'tasks_left' in best:
-      out.append('%*d:%*d'%(best['task_digits'], current['task'], best['task_digits'], best['tasks_left']))
+   if 'task' in current and TasksLeft is not None:
+      digits = TaskDigits.value
+      out.append('%*d:%*d'%(digits, current['task'], digits, TasksLeft.value))
    out = " ".join(out)
    return out
 
@@ -218,10 +223,10 @@ def load_files(files, width, gap, verbose=0, multiprocess=False, priority=None):
    Exit:  parts: the files loaded and processed."""
    parts = [None]*len(files)
    if multiprocess:
+      kwarg = {}
       if multiprocess is not True:
-         pool = multiprocessing.Pool(multiprocess, initializer=worker_init)
-      else:
-         pool = multiprocessing.Pool(initializer=worker_init)
+         kwarg['processes'] = multiprocess
+      pool = multiprocessing.Pool(initializer=worker_init, **kwarg)
       tasks = []
    else:
       pool = None
@@ -321,8 +326,9 @@ def process_image(current, parts, partnum, best, pool=None, tasks=None):
       if partnum>=current.get('stage', 0.5):
          current['task'] = len(tasks)
          tasks.append(pool.apply_async(process_image_task, args=(current, parts, partnum, best)))
-         best['tasks_left'] = len(tasks)
-         best['task_digits'] = len('%d'%len(tasks))
+         tasks[-1].task_num = current['task']
+         TasksLeft.value = len(tasks)
+         TaskDigits.value = len('%d'%len(tasks))
          return
    if not 'order' in current:
       current['order'] = range(len(parts))
@@ -348,8 +354,9 @@ def process_image(current, parts, partnum, best, pool=None, tasks=None):
                taskcur = deepcopy(newcur)
                taskcur['task'] = len(tasks)
                tasks.append(pool.apply_async(process_image_orient_task, args=(taskcur, parts, partnum, best, (orient&1)==1, (orient&2)==2)))
-               best['tasks_left'] = len(tasks)
-               best['task_digits'] = len('%d'%len(tasks))
+               tasks[-1].task_num = taskcur['task']
+               TasksLeft.value = len(tasks)
+               TaskDigits.value = len('%d'%len(tasks))
                continue
          process_image_orient(newcur, parts, partnum, best, (orient&1)==1, (orient&2)==2, pool, tasks)
 
@@ -409,8 +416,7 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, pool=None,
          newcur['w'] = max(newcur['w'], x+part['w'])
          newcur['ranges'] = calculate_ranges(newcur['mask'], newcur['w'])
          newcur['state'].append({'num':part['num'], 'fliph':fliph, 'flipv':flipv, 'x':x, 'y':y})
-         #if verbose>=5 or ((verbose>=2 or (verbose>=1 and partnum+1==numparts)) and (not 'task' in newcur or newcur['task']==best['task_watch'])):
-         if verbose>=2:
+         if verbose>=5 or ((verbose>=2 or (verbose>=1 and partnum+1==numparts)) and (not 'task' in newcur or (TaskWatch is not None and newcur['task']==TaskWatch.value))):
             if verbose>=4 or time.time()-best.get('laststatus', 0)>=1:
                state = get_state(newcur, best)
                sys.stdout.write('%-79s\r'%state[-79:])
@@ -452,35 +458,29 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, pool=None,
 
 
 def process_image_orient_task(current, parts, partnum, best, fliph, flipv):
-   """Process an image, marking the task started and finished as
-    appropriate.
+   """Process an image, returning the result.
    Enter: current: the current layout state.
           parts: the list of parts to process in order.
           partnum: the 0-based index into the parts to process.
           best: a dictionary with the best result so far; can be changed.
           fliph, flipv: the orientation of the image for processing.
    Exit:  best: best layout found in this task."""
-   best['tasks_started'] += '%d '%current['task']
    if current['priority']:
       set_priority(current['priority'])
    process_image_orient(current, parts, partnum, best, fliph, flipv)
-   best['tasks_finished'] += '%d '%current['task']
    return best
 
 
 def process_image_task(current, parts, partnum, best):
-   """Process an image, marking the task started and finished as
-    appropriate.
+   """Process an image, returning the result.
    Enter: current: the current layout state.
           parts: the list of parts to process in order.
           partnum: the 0-based index into the parts to process.
           best: a dictionary with the best result so far; can be changed.
    Exit:  best: best layout found in this task."""
-   best['tasks_started'] += '%d '%current['task']
    if current['priority']:
       set_priority(current['priority'])
    process_image(current, parts, partnum, best)
-   best['tasks_finished'] += '%d '%current['task']
    return best
 
 
@@ -516,19 +516,16 @@ def process_parts(Parts, Current, Best):
    Current['y_digits'] = len('%d'%Height)
 
    if Multiprocess:
+      global TasksLeft, TaskDigits, TaskWatch, TaskBestW
+      TasksLeft = multiprocessing.Value('i', 0)
+      TaskDigits = multiprocessing.Value('i', 1)
+      TaskWatch = multiprocessing.Value('i', 0)
+      TaskBestW = multiprocessing.Value('i', Best['w'])
+      kwarg = {}
       if Multiprocess is not True:
-         pool = multiprocessing.Pool(Multiprocess, initializer=worker_init)
-      else:
-         pool = multiprocessing.Pool(initializer=worker_init)
+         kwarg['processes'] = Multiprocess
+      pool = multiprocessing.Pool(initializer=worker_init, initargs=(TasksLeft, TaskDigits, TaskWatch, TaskBestW), **kwarg)
       tasks = []
-      Best['tasks_left'] = 0
-      Best['tasks_started'] = ""
-      Best['tasks_finished'] = ""
-      tasks_last_list = ""
-      tasks_started = {}
-      tasks_finished = {}
-      Best['task_watch'] = 0
-      Best['task_digits'] = 1
    else:
       pool = None
       tasks = None
@@ -549,19 +546,12 @@ def process_parts(Parts, Current, Best):
                   partbest = tasks[t].get()
                   if partbest['w']<Best['w']:
                      Best['w'] = partbest['w']
+                     TaskBestW.value = Best['w']
                      Best['data'] = partbest['data']
                   tasks[t:t+1] = []
-            Best['tasks_left'] = len(tasks)
-            try:
-               if tasks_last_list != Best['tasks_started']+Best['tasks_finished']:
-                  tasks_last_list = Best['tasks_started']+Best['tasks_finished']
-                  tasks_started = dict.fromkeys([int(task) for task in Best['tasks_started'].strip().split()])
-                  tasks_finished = dict.fromkeys([int(task) for task in Best['tasks_finished'].strip().split()])
-                  watch = min([task for task in tasks_started.keys() if not task in tasks_finished])
-                  if Best['task_watch'] != watch:
-                     Best['task_watch'] = watch
-            except Exception:
-               pass
+            TasksLeft.value = len(tasks)
+            if len(tasks):
+               TaskWatch.value = tasks[0].task_num
          pool.join()
    except KeyboardInterrupt:
       if pool:
@@ -612,9 +602,21 @@ def set_priority(priority):
    proc.nice(level)
 
 
-def worker_init():
-   """Supress the ctrl-c signal in the worker processes."""
+def worker_init(tasks_left=None, task_digits=None, task_watch=None, task_best_w=None):
+   """Supress the ctrl-c signal in the worker processes, and record the
+    shared memory objects.
+   Enter: tasks_left: shared memory object."""
+   global TasksLeft, TaskDigits, TaskWatch, TaskBestW
+
    signal.signal(signal.SIGINT, signal.SIG_IGN)
+   if tasks_left:
+      TasksLeft = tasks_left
+   if task_digits:
+      TaskDigits = task_digits
+   if task_watch:
+      TaskWatch = task_watch
+   if task_best_w:
+      TaskBestW = task_best_w
 
 
 def write_ppm(filename, data, maxw=None, quiet=1, verbose=None):
