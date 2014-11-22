@@ -386,8 +386,15 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, pool=None,
    group_w = current['widths'].get(group_key, None)
    part = parts[current['order'][partnum]]
    numparts = len(parts)
-   # xmax is min(current['maxw']+1, (ranges calc))
-   for x in xrange(current['lastx'], current['maxw']+1):
+   xmin = current['lastx']
+   if partnum>0:
+      start_group_key = tuple([parts[index]['num'] for index in current['order'][:partnum+1]])
+      start_group_minx = current['widths_xmin'].get(start_group_key, None)
+      if start_group_minx:
+         start_xmin = current['state'][0]['x']+start_group_minx
+         if start_xmin>xmin:
+            xmin = start_xmin
+   for x in xrange(xmin, current['maxw']+1):
       bestw = best['w']
       if TaskBestW:
          taskbestw = TaskBestW.value
@@ -736,8 +743,10 @@ or equal to 0xC0, it is ignored for overlap calculations.
    Best = {}
 
    Current['widths'] = {}
+   Current['widths_xmin'] = {}
    for part in Parts:
       Current['widths'][(part['num'], )] = part['w']
+      Current['widths_xmin'][(part['num'], )] = 0
    Current['widths_values'] = dict.fromkeys(Current['widths'].values())
    for comblen in xrange(2, len(Parts)):
       for combo in itertools.combinations(Parts, comblen):
@@ -749,6 +758,7 @@ or equal to 0xC0, it is ignored for overlap calculations.
          keys = [part['num'] for part in combo]
          for perm in itertools.permutations(keys):
             Current['widths'][perm] = w
+            Current['widths_xmin'][perm] = w - Parts[perm[-1]]['w']
       if Verbose>=3:
          pprint.pprint(Current['widths'])
       Current['widths_values'] = dict.fromkeys(Current['widths'].values())
