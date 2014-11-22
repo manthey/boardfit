@@ -388,12 +388,13 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, pool=None,
    numparts = len(parts)
    xmin = current['lastx']
    if partnum>0:
-      start_group_key = tuple([parts[index]['num'] for index in current['order'][:partnum+1]])
-      start_group_minx = current['widths_xmin'].get(start_group_key, None)
-      if start_group_minx:
-         start_xmin = current['state'][0]['x']+start_group_minx
-         if start_xmin>xmin:
-            xmin = start_xmin
+      for xpart in xrange(0, partnum):
+         start_group_key = tuple([parts[index]['num'] for index in current['order'][xpart:partnum+1]])
+         start_group_minx = current['widths_xmin'].get(start_group_key, None)
+         if start_group_minx:
+            start_xmin = current['state'][xpart]['x']+start_group_minx
+            if start_xmin>xmin:
+               xmin = start_xmin
    for x in xrange(xmin, current['maxw']+1):
       bestw = best['w']
       if TaskBestW:
