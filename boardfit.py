@@ -388,11 +388,16 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, pool=None,
    numparts = len(parts)
    # xmax is min(current['maxw']+1, (ranges calc))
    for x in xrange(current['lastx'], current['maxw']+1):
-      if best['w'] in current['widths_values']:
+      bestw = best['w']
+      if TaskBestW:
+         taskbestw = TaskBestW.value
+         if taskbestw<bestw:
+            bestw = taskbestw
+      if bestw in current['widths_values']:
          return
-      if group_w and x+group_w>=best['w']:
+      if group_w and x+group_w>=bestw:
          break
-      if x+part['w']>=best['w']:
+      if x+part['w']>=bestw:
          break
       overlapped = False
       ymin = 0
@@ -417,11 +422,11 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, pool=None,
          newcur['ranges'] = calculate_ranges(newcur['mask'], newcur['w'])
          newcur['state'].append({'num':part['num'], 'fliph':fliph, 'flipv':flipv, 'x':x, 'y':y})
          if verbose>=5 or ((verbose>=2 or (verbose>=1 and partnum+1==numparts)) and (not 'task' in newcur or (TaskWatch is not None and newcur['task']==TaskWatch.value))):
-            if verbose>=4 or time.time()-best.get('laststatus', 0)>=1:
+            curtime = time.time()
+            if verbose>=4 or curtime-best.get('laststatus', 0)>=1:
                state = get_state(newcur, best)
                sys.stdout.write('%-79s\r'%state[-79:])
                sys.stdout.flush()
-               curtime = time.time()
                best['laststatus'] = curtime
                if curtime-best.get('lastlogppm', 0)>60:
                   write_ppm('status.ppm', newcur['data'], best['w'], quiet=4, verbose=verbose)
@@ -437,10 +442,13 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, pool=None,
          if newcur['w']>=best['w']:
             continue
          if partnum+1==numparts:
+            best['w'] = newcur['w']
+            best['data'] = newcur['data']
             # This could have been changed by another process, so make sure
-            if newcur['w']<best['w']:
-               best['w'] = newcur['w']
-               best['data'] = newcur['data']
+            if TaskBestW is not None and newcur['w']<TaskBestW.value:
+               with TaskBestW.get_lock():
+                  if newcur['w']<TaskBestW.value:
+                     TaskBestW.value = newcur['w']
             if verbose>=3 or (verbose>=1 and current['parts']==current['totalparts']):
                print get_state(newcur, best)
                print 'Current best width: %d '%best['w']
@@ -468,6 +476,10 @@ def process_image_orient_task(current, parts, partnum, best, fliph, flipv):
    if current['priority']:
       set_priority(current['priority'])
    process_image_orient(current, parts, partnum, best, fliph, flipv)
+   if current['verbose']>=2 and TaskWatch is not None and current['task']==TaskWatch.value:
+      state = get_state(current, best)
+      sys.stdout.write('%-79s\r'%state[-79:])
+      sys.stdout.flush()
    return best
 
 
@@ -481,6 +493,10 @@ def process_image_task(current, parts, partnum, best):
    if current['priority']:
       set_priority(current['priority'])
    process_image(current, parts, partnum, best)
+   if current['verbose']>=2 and TaskWatch is not None and current['task']==TaskWatch.value:
+      state = get_state(current, best)
+      sys.stdout.write('%-79s\r'%state[-79:])
+      sys.stdout.flush()
    return best
 
 
@@ -519,7 +535,7 @@ def process_parts(Parts, Current, Best):
       global TasksLeft, TaskDigits, TaskWatch, TaskBestW
       TasksLeft = multiprocessing.Value('i', 0)
       TaskDigits = multiprocessing.Value('i', 1)
-      TaskWatch = multiprocessing.Value('i', 0)
+      TaskWatch = multiprocessing.Value('i', -1)
       TaskBestW = multiprocessing.Value('i', Best['w'])
       kwarg = {}
       if Multiprocess is not True:
@@ -546,8 +562,11 @@ def process_parts(Parts, Current, Best):
                   partbest = tasks[t].get()
                   if partbest['w']<Best['w']:
                      Best['w'] = partbest['w']
-                     TaskBestW.value = Best['w']
                      Best['data'] = partbest['data']
+                     if Best['w']<TaskBestW.value:
+                        with TaskBestW.get_lock():
+                           if Best['w']<TaskBestW.value:
+                              TaskBestW.value = Best['w']
                   tasks[t:t+1] = []
             TasksLeft.value = len(tasks)
             if len(tasks):
