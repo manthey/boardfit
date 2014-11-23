@@ -390,9 +390,9 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, pool=None,
    if partnum>0:
       for xpart in xrange(0, partnum):
          start_group_key = tuple([parts[index]['num'] for index in current['order'][xpart:partnum+1]])
-         start_group_minx = current['widths_xmin'].get(start_group_key, None)
-         if start_group_minx:
-            start_xmin = current['state'][xpart]['x']+start_group_minx
+         start_group_xmin = current['widths_xmin'].get(start_group_key, None)
+         if start_group_xmin:
+            start_xmin = current['state'][xpart]['x']+start_group_xmin
             if start_xmin>xmin:
                xmin = start_xmin
    for x in xrange(xmin, current['maxw']+1):
@@ -753,15 +753,22 @@ or equal to 0xC0, it is ignored for overlap calculations.
       for combo in itertools.combinations(Parts, comblen):
          part_starttime = time.time()
          w = process_parts(combo, Current, {})
+         xmin = w - max([part['w'] for part in combo])
          if Verbose>=2:
             out = 'Partial: %s %d (%3.1fs)'%(str(tuple([part['num'] for part in combo])), w, time.time()-part_starttime)
             print "%-79s"%out
          keys = [part['num'] for part in combo]
          for perm in itertools.permutations(keys):
             Current['widths'][perm] = w
-            Current['widths_xmin'][perm] = w - Parts[perm[-1]]['w']
+            Current['widths_xmin'][perm] = xmin
+            left_w = Current['widths'][tuple([part['num'] for part in combo if part['num']!=perm[-1]])]
+            if w > left_w:
+               Current['widths_xmin'][perm] = w - Parts[perm[-1]]['w']
       if Verbose>=3:
+         print "Widths"
          pprint.pprint(Current['widths'])
+         print "Widths XMin"
+         pprint.pprint(Current['widths_xmin'])
       Current['widths_values'] = dict.fromkeys(Current['widths'].values())
 
    process_parts(Parts, Current, Best)
