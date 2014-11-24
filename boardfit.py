@@ -83,7 +83,7 @@ def calculate_ranges(image, maxw=None):
                   pixel.  If no pixels are used in that line, this is
                   stored as (None, None)"""
    ranges = []
-   if maxw is None:
+   if maxw is None or maxw>len(image[0]):
       maxw = len(image[0])
    for line in image:
       minx = maxx = None
