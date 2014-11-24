@@ -387,7 +387,9 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, pool=None,
    part = parts[current['order'][partnum]]
    numparts = len(parts)
    xmin = current['lastx']
+   allow_overlap_termination = True
    if partnum>0:
+      allow_overlap_termination = False
       for xpart in xrange(0, partnum):
          start_group_key = tuple([parts[index]['num'] for index in current['order'][xpart:partnum+1]])
          start_group_xmin = current['widths_xmin'].get(start_group_key, None)
@@ -395,6 +397,7 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, pool=None,
             start_xmin = current['state'][xpart]['x']+start_group_xmin
             if start_xmin>xmin:
                xmin = start_xmin
+               allow_overlap_termination = True
    for x in xrange(xmin, current['maxw']+1):
       bestw = best['w']
       if TaskBestW:
@@ -427,7 +430,7 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, pool=None,
          newcur['lasty'] = y
          newcur['maxw'] = max(newcur['maxw'], x+part['w']+gap)
          newcur['w'] = max(newcur['w'], x+part['w'])
-         newcur['ranges'] = calculate_ranges(newcur['mask'], newcur['w'])
+         newcur['ranges'] = calculate_ranges(newcur['mask'], newcur['w']+gap)
          newcur['state'].append({'num':part['num'], 'fliph':fliph, 'flipv':flipv, 'x':x, 'y':y})
          if verbose>=5 or ((verbose>=2 or (verbose>=1 and partnum+1==numparts)) and (not 'task' in newcur or (TaskWatch is not None and newcur['task']==TaskWatch.value))):
             curtime = time.time()
@@ -469,7 +472,7 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, pool=None,
       # 0  11111   left with three parts with a gap of 1, the solution shown
       # 0      1   will never be reached with a width of 8.  Rather, part 2
       # 000 22 1   will end up to the right of part 1 with a width of 10.
-      if not overlapped:
+      if allow_overlap_termination and not overlapped:
          break
 
 
