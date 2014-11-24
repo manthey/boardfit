@@ -146,7 +146,7 @@ def load_file(file, width, gap, verbose=0, priority=None, num=None):
    if not data.startswith('P5'):
       print "File %s is not a P5 PPM"%file
       sys.exit(0)
-   groups = re.match('(P5\W([1-9][0-9]*)\W([1-9][0-9]*)\W([1-9][0-9]*).)', data).groups()
+   groups = re.match('(P5\W([1-9][0-9]*)\W([1-9][0-9]*)\W([1-9][0-9]*).)', data, re.DOTALL).groups()
    w = int(groups[1])
    h = int(groups[2])
    data = data[len(groups[0]):]
