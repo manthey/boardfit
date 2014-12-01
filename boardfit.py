@@ -389,7 +389,6 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, pool=None,
    xmin = current['lastx']
    allow_overlap_termination = True
    if partnum>0:
-      allow_overlap_termination = False
       for xpart in xrange(0, partnum):
          start_group_key = tuple([parts[index]['num'] for index in current['order'][xpart:partnum+1]])
          start_group_xmin = current['widths_xmin'].get(start_group_key, None)
@@ -397,7 +396,8 @@ def process_image_orient(current, parts, partnum, best, fliph, flipv, pool=None,
             start_xmin = current['state'][xpart]['x']+start_group_xmin
             if start_xmin>xmin:
                xmin = start_xmin
-               allow_overlap_termination = True
+         else:
+            allow_overlap_termination = False
    for x in xrange(xmin, current['maxw']+1):
       bestw = best['w']
       if TaskBestW:

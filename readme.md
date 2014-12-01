@@ -19,6 +19,6 @@ The program outputs:
 
 - The width of the stock necessary to fit all of the parts.
 
-The parts are placed within constrained orientation, only allowing vertical or horizontal flips (not arbitrary rotations), as the original intent is to place wooden pieces where the grain direction is critical.
+The parts are placed with constrained orientation, only allowing vertical or horizontal flips (not arbitrary rotations), as the original intent is to place wooden pieces where the grain direction is critical.
 
 
